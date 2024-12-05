@@ -10,7 +10,11 @@ import {
   UserResponse,
 } from "../types.ts";
 import { UserStatus } from "@prisma/client";
-import { EmailSchema, LoginSchema, RegisterSchema } from "../schemas/auth.schemas.ts";
+import {
+  EmailSchema,
+  LoginSchema,
+  RegisterSchema,
+} from "../schemas/auth.schemas.ts";
 import { sendEmail } from "../utils/nodeMailer.ts";
 import { sendVerificationEmail } from "../utils/nodeMailer.ts";
 
@@ -35,16 +39,16 @@ export const login = async (
     const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user) {
-      res.status(404).json({ message: "User not found", data: null });
-      return; // Finalizamos la ejecución, ya que la respuesta ha sido enviada
+      sendResponse(res, 404, "User not found");
+      return;
     }
 
     // Comparar la contraseña ingresada con la almacenada
     const isValidPassword = await bcrypt.compare(password, user.password);
 
     if (!isValidPassword) {
-      res.status(401).json({ message: "Invalid credentials", data: null });
-      return; // Finalizamos la ejecución, ya que la respuesta ha sido enviada
+      sendResponse(res, 401, "Invalid credentials");
+      return;
     }
 
     // Actualizar el último acceso del usuario
@@ -54,31 +58,32 @@ export const login = async (
     });
 
     // Generar el token JWT
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET!, {
-      expiresIn: "1h",
-    });
+    const token = jwt.sign(
+      { userId: updatedUser.id },
+      process.env.JWT_SECRET!,
+      {
+        expiresIn: "1h",
+      }
+    );
 
-    // Preparar la respuesta del usuario
+    // Preparar la respuesta del usuario con solo los campos necesarios
     const userResponse = {
       id: updatedUser.id,
       email: updatedUser.email,
       full_name: updatedUser.full_name,
       status: updatedUser.status,
-      profile_picture: updatedUser.profile_picture,
       is_verified: updatedUser.is_verified,
       last_login: updatedUser.last_login,
-      created_at: updatedUser.created_at,
-      updated_at: updatedUser.updated_at,
     };
 
-    // Enviar la respuesta exitosa
+    // Enviar la respuesta exitosa con el token y la información del usuario
     res.status(200).json({
       message: "Login successful",
       data: { token, user: userResponse },
     });
   } catch (error) {
-    // Manejar errores
-    res.status(500).json({ message: "Error logging in", data: error });
+    console.error(error); // Loguea el error para poder revisarlo
+    res.status(500).json({ message: "Error logging in", data: null });
   }
 };
 
@@ -104,6 +109,16 @@ export const register = async (
       verificationRecord.expiresAt < new Date()
     ) {
       sendResponse(res, 400, "Invalid or expired verification code");
+      return;
+    }
+
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      sendResponse(res, 400, "Email is already in use");
+      return;
     }
 
     const user = await prisma.user.create({
@@ -129,6 +144,7 @@ export const register = async (
     sendResponse(res, 201, "User created", userResponse);
   } catch (error) {
     sendResponse(res, 500, "Error creating user", error);
+    console.log(error);
   }
 };
 
@@ -172,10 +188,18 @@ export const sendVerificationCode = async (
   req: Request<{}, {}, { email: string }>,
   res: Response
 ) => {
+  EmailSchema.safeParse(req.body);
 
-  EmailSchema.safeParse(req.body)
-  
   const { email } = req.body;
+
+  const existingUser = await prisma.user.findUnique({
+    where: { email },
+  });
+
+  if (existingUser) {
+    sendResponse(res, 400, "Email is already in use");
+    return;
+  }
 
   // Generar un código de verificación
   const verificationCodee = Math.floor(1000 + Math.random() * 9000).toString();
