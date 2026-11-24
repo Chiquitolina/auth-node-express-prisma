@@ -1,41 +1,28 @@
-import { z } from "zod";
+import { z } from 'zod';
 
-export const RegisterSchema = z
-  .object({
-    email: z.string().email({ message: "Invalid email format" }),
-    full_name: z
-      .string()
-      .min(2, { message: "Full Name must have at least 2 characters" }),
-    password: z
-      .string()
-      .min(6, { message: "Password must be at least 6 characters long" }),
-    confirmPassword: z.string(),
-  })
-  .refine((data) => data.password === data.confirmPassword, {
-    message: "Passwords do not match",
-    path: ["confirmPassword"], // Marca el error en el campo `confirmPassword`
-  });
+const email = z.string().trim().email({ message: 'Invalid email format' }).transform(v => v.toLowerCase());
 
-// Esquema para el inicio de sesión
+export const EmailSchema = z.object({ email });
+
 export const LoginSchema = z.object({
-  email: z.string().email({ message: "Invalid email format" }),
-  password: z
-    .string()
-    .min(6, { message: "Password must be at least 6 characters long" }),
+  email,
+  password: z.string().min(1, { message: 'Password is required' }),
 });
 
-// Esquema para actualizar el estado del usuario
-export const UpdateStatusSchema = z.object({
-  status: z.enum(["online", "offline", "away", "busy"], {
-    message: "Invalid status",
-  }),
+export const RegisterSchema = z.object({
+  email,
+  full_name: z.string().trim().min(2, { message: 'Full name must have at least 2 characters' }).max(120),
+  password: z.string().min(8, { message: 'Password must have at least 8 characters' })
+    .regex(/[A-Z]/, 'Password must contain uppercase')
+    .regex(/\d/, 'Password must contain a number')
+    .regex(/[!@#$%^&*(),.?":{}|<>]/, 'Password must contain a special character'),
+  confirmPassword: z.string().optional(),
+  verification_code: z.string().regex(/^\d{4}$/, 'Verification code must contain 4 digits'),
+}).refine(data => data.confirmPassword === undefined || data.password === data.confirmPassword, {
+  message: 'Passwords do not match', path: ['confirmPassword'],
 });
 
-export const EmailSchema = z.object({
-  email: z.string().email({ message: "Invalid email format" }),
-});
-
-// Tipos generados automáticamente
+export const UpdateStatusSchema = z.object({ status: z.enum(['online', 'offline', 'away', 'busy']) });
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 export type LoginInput = z.infer<typeof LoginSchema>;
 export type UpdateStatusInput = z.infer<typeof UpdateStatusSchema>;

@@ -1,229 +1,134 @@
-import { Request, Response } from "express";
-import bcrypt from "bcrypt";
-import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
-import { sendResponse } from "../utils/sendResponse.ts";
-import {
-  RegisterRequestBody,
-  AuthRequestBody,
-  UpdateStatusRequestBody,
-  UserResponse,
-} from "../types.ts";
-import { UserStatus } from "@prisma/client";
-import {
-  EmailSchema,
-  LoginSchema,
-  RegisterSchema,
-} from "../schemas/auth.schemas.ts";
-import { sendEmail } from "../utils/nodeMailer.ts";
-import { sendVerificationEmail } from "../utils/nodeMailer.ts";
+import { Request, Response } from 'express';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import { PrismaClient, Prisma } from '@prisma/client';
+import { randomInt } from 'node:crypto';
+import { sendResponse } from '../utils/sendResponse';
+import { AuthenticatedRequest } from '../middleware/requireAuth';
+import { sendVerificationEmail } from '../utils/nodeMailer';
 
 const prisma = new PrismaClient();
-const JWT_SECRET = process.env.JWT_SECRET || "your_jwt_secret_key";
 
-export const verification = async (req: Request, res: Response) => {
-  return res.json({});
-};
-
-export const login = async (
-  req: Request<{}, {}, RegisterRequestBody>,
-  res: Response
-): Promise<void> => {
+export async function login(req: Request, res: Response): Promise<void> {
+  const { email, password } = req.body as { email: string; password: string };
   try {
-    // Validar los datos del body usando Zod
-    LoginSchema.parse(req.body); // Si falla, Zod lanzará un error
-
-    const { email, password } = req.body;
-
-    // Buscar al usuario en la base de datos
     const user = await prisma.user.findUnique({ where: { email } });
-
-    if (!user) {
-      sendResponse(res, 404, "User not found");
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      sendResponse(res, 401, 'Invalid credentials');
       return;
     }
-
-    // Comparar la contraseña ingresada con la almacenada
-    const isValidPassword = await bcrypt.compare(password, user.password);
-
-    if (!isValidPassword) {
-      sendResponse(res, 401, "Invalid credentials");
-      return;
-    }
-
-    // Actualizar el último acceso del usuario
-    const updatedUser = await prisma.user.update({
-      where: { id: user.id },
-      data: { last_login: new Date() },
+    const updated = await prisma.user.update({ where: { id: user.id }, data: { last_login: new Date() } });
+    const token = jwt.sign({ userId: updated.id }, process.env.JWT_SECRET as string, {
+      algorithm: 'HS256', expiresIn: '1h',
     });
-
-    // Generar el token JWT
-    const token = jwt.sign(
-      { userId: updatedUser.id },
-      process.env.JWT_SECRET!,
-      {
-        expiresIn: "1h",
-      }
-    );
-
-    // Preparar la respuesta del usuario con solo los campos necesarios
-    const userResponse = {
-      id: updatedUser.id,
-      email: updatedUser.email,
-      full_name: updatedUser.full_name,
-      status: updatedUser.status,
-      is_verified: updatedUser.is_verified,
-      last_login: updatedUser.last_login,
-    };
-
-    // Enviar la respuesta exitosa con el token y la información del usuario
     res.status(200).json({
-      message: "Login successful",
-      data: { token, user: userResponse },
-    });
-  } catch (error) {
-    console.error(error); // Loguea el error para poder revisarlo
-    res.status(500).json({ message: "Error logging in", data: null });
-  }
-};
-
-export const register = async (
-  req: Request<{}, {}, RegisterRequestBody>,
-  res: Response
-) => {
-  RegisterSchema.parse(req.body); // Si falla, Zod lanzará un error
-
-  const { email, password, full_name, verification_code } = req.body;
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-
-  try {
-    const verificationRecord = await prisma.verificationCode.findUnique({
-      where: { email },
-    });
-
-    // Validar que el código exista, coincida y no haya expirado
-    if (
-      !verificationRecord ||
-      verificationRecord.code !== verification_code ||
-      verificationRecord.expiresAt < new Date()
-    ) {
-      sendResponse(res, 400, "Invalid or expired verification code");
-      return;
-    }
-
-    const existingUser = await prisma.user.findUnique({
-      where: { email },
-    });
-
-    if (existingUser) {
-      sendResponse(res, 400, "Email is already in use");
-      return;
-    }
-
-    const user = await prisma.user.create({
+      message: 'Login successful',
       data: {
-        email,
-        password: hashedPassword,
-        full_name,
+        token,
+        user: {
+          id: updated.id,
+          email: updated.email,
+          full_name: updated.full_name,
+          status: updated.status,
+          is_verified: updated.is_verified,
+          last_login: updated.last_login,
+        },
       },
     });
-
-    const userResponse: UserResponse = {
-      id: user.id,
-      email: user.email,
-      full_name: user.full_name,
-      status: user.status,
-      profile_picture: user.profile_picture,
-      is_verified: user.is_verified,
-      last_login: user.last_login,
-      created_at: user.created_at,
-      updated_at: user.updated_at,
-    };
-
-    sendResponse(res, 201, "User created", userResponse);
   } catch (error) {
-    sendResponse(res, 500, "Error creating user", error);
-    console.log(error);
+    console.error('Login error', error);
+    sendResponse(res, 500, 'Error logging in');
   }
-};
+}
 
-export const updateStatus = async (
-  req: Request<{}, {}, UpdateStatusRequestBody>,
-  res: Response
-) => {
-  const { status } = req.body;
-
-  if (!["online", "offline", "away", "busy"].includes(status)) {
-    sendResponse(res, 400, "Invalid status");
-  }
-
+export async function register(req: Request, res: Response): Promise<void> {
+  const { email, password, full_name, verification_code } = req.body as {
+    email: string; password: string; full_name: string; verification_code: string;
+  };
   try {
-    const userId = (req as any).user.userId;
-
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: { status },
+    const verificationRecord = await prisma.verificationCode.findUnique({ where: { email } });
+    if (!verificationRecord || verificationRecord.expiresAt < new Date() ||
+        !(await bcrypt.compare(verification_code, verificationRecord.code))) {
+      sendResponse(res, 400, 'Invalid or expired verification code');
+      return;
+    }
+    if (await prisma.user.findUnique({ where: { email } })) {
+      sendResponse(res, 409, 'Email is already in use');
+      return;
+    }
+    const hashedPassword = await bcrypt.hash(password, 12);
+    const user = await prisma.$transaction(async tx => {
+      const created = await tx.user.create({
+        data: { email, full_name, password: hashedPassword, is_verified: true },
+      });
+      await tx.verificationCode.deleteMany({ where: { email, code: verificationRecord.code } });
+      return created;
     });
-
-    const userResponse: UserResponse = {
-      id: updatedUser.id,
-      email: updatedUser.email,
-      full_name: updatedUser.full_name,
-      status: updatedUser.status,
-      profile_picture: updatedUser.profile_picture,
-      is_verified: updatedUser.is_verified,
-      last_login: updatedUser.last_login,
-      created_at: updatedUser.created_at,
-      updated_at: updatedUser.updated_at,
-    };
-
-    sendResponse(res, 200, "Status updated", userResponse);
+    sendResponse(res, 201, 'User created', {
+      id: user.id, email: user.email, full_name: user.full_name,
+      status: user.status, profile_picture: user.profile_picture,
+      is_verified: user.is_verified, last_login: user.last_login,
+      created_at: user.created_at, updated_at: user.updated_at,
+    });
   } catch (error) {
-    sendResponse(res, 500, "Error updating status", error);
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      sendResponse(res, 409, 'Email is already in use');
+      return;
+    }
+    console.error('Register error', error);
+    sendResponse(res, 500, 'Error creating user');
   }
-};
+}
 
-export const sendVerificationCode = async (
-  req: Request<{}, {}, { email: string }>,
-  res: Response
-) => {
-  EmailSchema.safeParse(req.body);
-
-  const { email } = req.body;
-
-  const existingUser = await prisma.user.findUnique({
-    where: { email },
-  });
-
-  if (existingUser) {
-    sendResponse(res, 400, "Email is already in use");
-    return;
-  }
-
-  // Generar un código de verificación
-  const verificationCodee = Math.floor(1000 + Math.random() * 9000).toString();
-
+export async function sendVerificationCode(req: Request, res: Response): Promise<void> {
+  const { email } = req.body as { email: string };
   try {
-    // Guardar el código y su vencimiento en UTC
+    if (await prisma.user.findUnique({ where: { email } })) {
+      sendResponse(res, 409, 'Email is already in use');
+      return;
+    }
+    if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS) {
+      sendResponse(res, 503, 'Email service unavailable');
+      return;
+    }
+    // Se conserva el OTP de 4 digitos porque el frontend V1 espera cuatro.
+    const code = String(randomInt(1000, 10000));
+    const hashedCode = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + 5 * 60_000);
     await prisma.verificationCode.upsert({
       where: { email },
-      update: {
-        code: verificationCodee,
-        expiresAt: new Date(Date.now() + 1 * 60 * 1000),
-      },
-      create: {
-        email,
-        code: verificationCodee,
-        expiresAt: new Date(Date.now() + 1 * 60 * 1000),
-      },
+      update: { code: hashedCode, expiresAt },
+      create: { email, code: hashedCode, expiresAt },
     });
-
-    // Enviar el código al usuario
-    await sendVerificationEmail(email, verificationCodee);
-
-    sendResponse(res, 200, "Verification code sent", null);
+    await sendVerificationEmail(email, code);
+    sendResponse(res, 200, 'Verification code sent');
   } catch (error) {
-    sendResponse(res, 500, "Error sending verification code", error);
+    console.error('Verification email error', error);
+    sendResponse(res, 503, 'Unable to send verification code');
   }
-};
+}
+
+export async function updateStatus(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const userId = req.authUserId;
+  const { status } = req.body as { status: 'online' | 'offline' | 'away' | 'busy' };
+  if (!userId) {
+    sendResponse(res, 401, 'Authentication required');
+    return;
+  }
+  try {
+    const user = await prisma.user.update({ where: { id: userId }, data: { status } });
+    sendResponse(res, 200, 'Status updated', {
+      id: user.id, email: user.email, full_name: user.full_name,
+      status: user.status, profile_picture: user.profile_picture,
+      is_verified: user.is_verified, last_login: user.last_login,
+      created_at: user.created_at, updated_at: user.updated_at,
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      sendResponse(res, 404, 'User not found');
+      return;
+    }
+    console.error('Status update error', error);
+    sendResponse(res, 500, 'Error updating status');
+  }
+}

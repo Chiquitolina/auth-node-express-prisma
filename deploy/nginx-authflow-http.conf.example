@@ -1,0 +1,61 @@
+# Ejemplo ANTES de Certbot. Adaptar solo luego de validar API en localhost.
+# No habilitar HTTPS hasta que DNS y HTTP funcionen.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name auth.alejandrogodino.dev;
+
+    root /var/www/auth/current;
+    index index.html;
+
+    location = /api/health-check {
+        limit_except GET { deny all; }
+        proxy_pass http://127.0.0.1:3004;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /api/login {
+        limit_except POST { deny all; }
+        proxy_pass http://127.0.0.1:3004;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /api/register {
+        limit_except POST { deny all; }
+        proxy_pass http://127.0.0.1:3004;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /api/get-code {
+        limit_except POST { deny all; }
+        proxy_pass http://127.0.0.1:3004;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location = /api/status {
+        limit_except PATCH { deny all; }
+        proxy_pass http://127.0.0.1:3004;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/ { return 403; }
+    location = /api { return 403; }
+
+    location / { try_files $uri $uri/ /index.html; }
+    location = /index.html { add_header Cache-Control 'no-cache'; }
+}
